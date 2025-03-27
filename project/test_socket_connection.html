@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Socket.IO Test</title>
+    <script src="https://cdn.socket.io/4.0.0/socket.io.min.js"></script>
+</head>
+<body>
+    <h1>Socket.IO Connection Test</h1>
+    <script>
+        const socket = io("http://localhost:8000/ws");
+
+        socket.on("connect", () => {
+            console.log("Connected to Socket.IO server");
+            document.body.innerHTML += "<p>Connected to Socket.IO server</p>";
+        });
+
+        socket.on("scan_progress", (data) => {
+            console.log("Scan progress:", data);
+        });
+
+        socket.on("scan_complete", (data) => {
+            console.log("Scan complete:", data);
+        });
+
+        socket.on("disconnect", () => {
+            console.log("Disconnected from Socket.IO server");
+            document.body.innerHTML += "<p>Disconnected from Socket.IO server</p>";
+        });
+    </script>
+</body>
+</html>
