@@ -1,3 +1,6 @@
+import sys
+import io
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
 from fastapi import FastAPI, UploadFile, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
@@ -45,11 +48,21 @@ def save_scan_results(scan_data):
     file_exists = os.path.isfile(CSV_FILE)
     with open(CSV_FILE, mode="a", newline="") as file:
         writer = csv.writer(file)
+        
+        # Write header only if the file doesn't exist
         if not file_exists:
-            writer.writerow(["Issue", "Severity", "Affected Paths", "Scan Date"])
-        for finding in scan_data["detailed_findings"]:
-            writer.writerow([finding["issue"], finding["severity"], ", ".join(finding["affected"]), scan_data["scan_date"]])
-
+            writer.writerow(["Issue", "Category", "Details", "Scan Date"])
+        
+        # Extract vulnerabilities
+        vulnerabilities = scan_data.get("vulnerabilities", [])
+        for vulnerability in vulnerabilities:
+            writer.writerow([vulnerability, "Vulnerability", "N/A", datetime.datetime.now().isoformat()])
+        
+        # Extract security misconfigurations
+        misconfigs = scan_data.get("security_misconfigs", [])
+        for misconfig in misconfigs:
+            writer.writerow([misconfig, "Misconfiguration", "N/A", datetime.datetime.now().isoformat()])
+            
 # Function to read scan results from CSV
 def read_scan_results():
     if not os.path.isfile(CSV_FILE):
@@ -74,37 +87,73 @@ def generate_pdf_from_csv():
     df = read_scan_results()
     if df is None or df.empty:
         return None
+
+    # Create a temporary directory for the output
     output_dir = tempfile.mkdtemp()
-    chart_path = create_severity_chart(df, output_dir)
     pdf_path = os.path.join(output_dir, "scan_report.pdf")
+    
+    # Initialize the PDF canvas
     c = canvas.Canvas(pdf_path, pagesize=letter)
     width, height = letter
-    c.setFont("Helvetica-Bold", 14)
+
+    # Add title
+    c.setFont("Helvetica-Bold", 16)
     c.drawString(30, height - 50, "Security Scan Report")
     c.setFont("Helvetica", 12)
-    y_position = height - 80
-    for _, row in df.iterrows():
-        c.drawString(30, y_position, f"Issue: {row['Issue']} (Severity: {row['Severity']})")
+    c.drawString(30, height - 70, f"Generated on: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+    y_position = height - 100
+
+    # Add vulnerabilities section
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(30, y_position, "Vulnerabilities:")
+    y_position -= 20
+    c.setFont("Helvetica", 12)
+    vulnerabilities = df[df["Category"] == "Vulnerability"]
+    if not vulnerabilities.empty:
+        for _, row in vulnerabilities.iterrows():
+            c.drawString(30, y_position, f"- {row['Issue']} (Details: {row['Details']})")
+            y_position -= 20
+            if y_position < 50:  # Start a new page if space runs out
+                c.showPage()
+                y_position = height - 50
+    else:
+        c.drawString(30, y_position, "No vulnerabilities found.")
         y_position -= 20
-        c.drawString(30, y_position, f"Affected Paths: {row['Affected Paths']}")
+
+    # Add misconfigurations section
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(30, y_position, "Security Misconfigurations:")
+    y_position -= 20
+    c.setFont("Helvetica", 12)
+    misconfigs = df[df["Category"] == "Misconfiguration"]
+    if not misconfigs.empty:
+        for _, row in misconfigs.iterrows():
+            c.drawString(30, y_position, f"- {row['Issue']} (Details: {row['Details']})")
+            y_position -= 20
+            if y_position < 50:  # Start a new page if space runs out
+                c.showPage()
+                y_position = height - 50
+    else:
+        c.drawString(30, y_position, "No misconfigurations found.")
         y_position -= 20
-    c.drawImage(chart_path, 100, y_position - 150, width=300, height=200)
+
+    # Save the PDF
     c.save()
-    os.remove(chart_path)
+
     return pdf_path
 
-# Endpoint to save scan results
+# Endpoint to save scan results:
 @app.post("/api/scan/save_results")
 async def save_scan_results_api(request: Request):
     try:
         scan_data = await request.json()
         if not scan_data:
             return JSONResponse({"error": "Invalid JSON input"}, status_code=400)
+        
         save_scan_results(scan_data)
         return {"message": "Scan results saved to CSV"}
     except Exception as e:
         return JSONResponse({"error": str(e)}, status_code=500)
-
 # Endpoint to generate and download PDF report
 @app.get("/api/report/download")
 async def download_report():
@@ -128,11 +177,37 @@ async def handle_generate_report(sid):
 # Existing Socket.IO events
 @sio.on('scan_progress')
 async def emit_scan_progress(scan_id, progress, message):
+    """Emit scan progress updates."""
+    print(f"📡 Emitting scan progress: {scan_id} - {progress}% - {message}")
     await sio.emit('scan_progress', {'id': scan_id, 'progress': progress, 'message': message})
 
 @sio.on('scan_complete')
 async def emit_scan_complete(scan_id, results):
-    await sio.emit('scan_complete', {'id': scan_id, 'results': results})
+    """Emit scan completion notifications."""
+    try:
+        # Convert datetime objects to ISO format
+        def serialize(obj):
+            if isinstance(obj, datetime.datetime):
+                return obj.isoformat()
+            elif isinstance(obj, list):
+                return [serialize(item) for item in obj]
+            elif isinstance(obj, dict):
+                return {key: serialize(value) for key, value in obj.items()}
+            return obj
+
+        serialized_results = serialize(results)
+        print(f"🎯 Scan complete for {scan_id}. Sending results: {serialized_results}")
+        await sio.emit('scan_complete', {'id': scan_id, 'results': serialized_results})
+    except Exception as e:
+        print(f"Error serializing scan results: {e}")
+
+# Add a new function to trigger scan completion and emit results
+async def trigger_scan_complete(scan_id, results):
+    """Trigger scan completion and notify frontend."""
+    print(f"🔔 Triggering scan complete for {scan_id} with results.")
+    serialized_results = serialize(results)
+    print(f"🎯 Scan complete for {scan_id}. Sending results: {serialized_results}")
+    await sio.emit('scan_complete', {'id': scan_id, 'results': serialized_results})
 
 app.mount("/", socket_app)
 

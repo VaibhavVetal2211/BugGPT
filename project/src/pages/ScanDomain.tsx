@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import ScanProgress from '../components/ScanProgress';
-import ScanReport from '../components/ScanReport';
 import { io } from 'socket.io-client';
 
 function ScanDomain() {
@@ -23,19 +21,14 @@ function ScanDomain() {
 
       socket.on('scan_progress', (data) => {
         setProgress(data.progress);
-        setCurrentTask(data.message); // Updated to use "message" from the backend
+        setCurrentTask(data.message);
       });
 
-      socket.on('scan_complete', async () => {
-        try {
-          const response = await axios.get(`http://localhost:8000/api/scan/results/${scanId}`);
-          setResults(response.data.results); // Ensure "results" is correctly accessed
-          setScanning(false);
-        } catch (err) {
-          console.error('Error fetching scan results:', err); // Log the error for debugging
-          setError('Failed to fetch scan results.');
-          setScanning(false);
-        }
+      socket.on('scan_complete', (data) => {
+        // Parse the results if they are received as a string
+        const parsedResults = typeof data.results === 'string' ? JSON.parse(data.results) : data.results;
+        setResults(parsedResults); // Set the parsed results
+        setScanning(false);
       });
 
       return () => {
@@ -59,6 +52,51 @@ function ScanDomain() {
       setError('Failed to start scan. Please try again.');
       setScanning(false);
     }
+  };
+
+  const renderResults = () => {
+    if (!results) return null;
+
+    const renderValue = (value: any) => {
+      if (Array.isArray(value)) {
+        return value.map((item, index) => (
+          <div key={index} className="ml-4">
+            - {typeof item === 'object' ? JSON.stringify(item, null, 2) : item}
+          </div>
+        ));
+      } else if (typeof value === 'object') {
+        return (
+          <pre className="bg-gray-100 p-2 rounded">
+            {JSON.stringify(value, null, 2)}
+          </pre>
+        );
+      } else {
+        return value.toString();
+      }
+    };
+
+    return (
+      <div className="mt-8">
+        <h2 className="text-2xl font-bold text-gray-900 mb-4">Scan Results</h2>
+        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
+          <div className="px-4 py-5 sm:px-6">
+            <h3 className="text-lg leading-6 font-medium text-gray-900">Domain Information</h3>
+          </div>
+          <div className="border-t border-gray-200">
+            <dl>
+              {Object.entries(results).map(([key, value]) => (
+                <div key={key} className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
+                  <dt className="text-sm font-medium text-gray-500">{key}</dt>
+                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
+                    {renderValue(value)}
+                  </dd>
+                </div>
+              ))}
+            </dl>
+          </div>
+        </div>
+      </div>
+    );
   };
 
   return (
@@ -108,15 +146,14 @@ function ScanDomain() {
 
         {scanning && (
           <div className="mt-8">
-            <ScanProgress progress={progress} currentTask={currentTask} />
+            <div className="text-center">
+              <p className="text-lg font-medium text-gray-900">{currentTask}</p>
+              <p className="text-sm text-gray-500">Progress: {progress}%</p>
+            </div>
           </div>
         )}
 
-        {results && (
-          <div className="mt-8">
-            <ScanReport results={results} />
-          </div>
-        )}
+        {renderResults()}
       </div>
     </div>
   );
