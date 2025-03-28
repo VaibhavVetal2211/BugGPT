@@ -1,6 +1,18 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
+import { useReactToPrint } from 'react-to-print';
+import {
+  BarChart,
+  Bar,
+  XAxis,
+  YAxis,
+  Tooltip,
+  Legend,
+  PieChart,
+  Pie,
+  Cell,
+} from 'recharts';
 
 function ScanDomain() {
   const [domain, setDomain] = useState('');
@@ -10,11 +22,29 @@ function ScanDomain() {
   const [progress, setProgress] = useState(0);
   const [currentTask, setCurrentTask] = useState('');
   const [results, setResults] = useState<any | null>(null);
+  const [scanCompleted, setScanCompleted] = useState(false);
+  const [scanDate, setScanDate] = useState<string | null>(null); // New state for scan date and time
+
+  // Ref for the printable section
+  const reportRef = useRef<HTMLDivElement>(null);
+
+  // Function to handle PDF download
+  const handlePrint = () => {
+    const printContent = reportRef.current;
+    if (printContent) {
+      const printWindow = window.open('', '_blank');
+      if (printWindow) {
+        printWindow.document.write(printContent.outerHTML);
+        printWindow.document.close();
+        printWindow.print();
+      }
+    }
+  };
 
   useEffect(() => {
     if (scanId) {
       const socket = io('http://localhost:8000');
-      
+
       socket.on('connect', () => {
         socket.emit('join_scan', scanId);
       });
@@ -25,10 +55,13 @@ function ScanDomain() {
       });
 
       socket.on('scan_complete', (data) => {
-        // Parse the results if they are received as a string
+        console.log("Scan complete data received:", data);
         const parsedResults = typeof data.results === 'string' ? JSON.parse(data.results) : data.results;
-        setResults(parsedResults); // Set the parsed results
+        console.log("Parsed results:", parsedResults);
+        setResults(parsedResults);
         setScanning(false);
+        setScanCompleted(true); // Mark scan as completed
+        setScanDate(new Date().toLocaleString()); // Set the scan date and time
       });
 
       return () => {
@@ -44,6 +77,7 @@ function ScanDomain() {
     setResults(null);
     setProgress(0);
     setCurrentTask('Initializing scan...');
+    setScanCompleted(false);
 
     try {
       const response = await axios.post('http://localhost:8000/api/scan/start', { domain });
@@ -54,47 +88,131 @@ function ScanDomain() {
     }
   };
 
-  const renderResults = () => {
-    if (!results) return null;
+  const renderValue = (value: any) => {
+    if (Array.isArray(value)) {
+      return value.join(', ');
+    } else if (typeof value === 'object' && value !== null) {
+      return <code>{JSON.stringify(value, null, 2)}</code>;
+    } else {
+      return value || 'N/A';
+    }
+  };
 
-    const renderValue = (value: any) => {
-      if (Array.isArray(value)) {
-        return value.map((item, index) => (
-          <div key={index} className="ml-4">
-            - {typeof item === 'object' ? JSON.stringify(item, null, 2) : item}
-          </div>
-        ));
-      } else if (typeof value === 'object') {
-        return (
-          <pre className="bg-gray-100 p-2 rounded">
-            {JSON.stringify(value, null, 2)}
-          </pre>
-        );
-      } else {
-        return value.toString();
-      }
-    };
+  const renderTable = () => {
+    if (!scanCompleted) {
+      return null; // Don't render anything until the scan is complete
+    }
+
+    if (!results || typeof results !== 'object') {
+      console.error("Results is not a valid object:", results);
+      return <p className="text-red-500">Error: Scan results are not in the expected format.</p>;
+    }
 
     return (
       <div className="mt-8">
-        <h2 className="text-2xl font-bold text-gray-900 mb-4">Scan Results</h2>
-        <div className="bg-white shadow overflow-hidden sm:rounded-lg">
-          <div className="px-4 py-5 sm:px-6">
-            <h3 className="text-lg leading-6 font-medium text-gray-900">Domain Information</h3>
-          </div>
-          <div className="border-t border-gray-200">
-            <dl>
-              {Object.entries(results).map(([key, value]) => (
-                <div key={key} className="bg-gray-50 px-4 py-5 sm:grid sm:grid-cols-3 sm:gap-4 sm:px-6">
-                  <dt className="text-sm font-medium text-gray-500">{key}</dt>
-                  <dd className="mt-1 text-sm text-gray-900 sm:mt-0 sm:col-span-2">
-                    {renderValue(value)}
-                  </dd>
-                </div>
+        <h3 className="text-lg font-bold mb-4">Scan Details</h3>
+        <div className="overflow-x-auto">
+          <table className="min-w-full bg-white shadow rounded-lg">
+            <thead>
+              <tr>
+                <th className="px-4 py-2 border">Field</th>
+                <th className="px-4 py-2 border">Value</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Object.entries(results).map(([key, value], index) => (
+                <tr key={index}>
+                  <td className="px-4 py-2 border font-bold">{key}</td>
+                  <td className="px-4 py-2 border">{renderValue(value)}</td>
+                </tr>
               ))}
-            </dl>
-          </div>
+            </tbody>
+          </table>
         </div>
+      </div>
+    );
+  };
+
+  const renderCharts = () => {
+    if (!scanCompleted) {
+      return null; // Don't render anything until the scan is complete
+    }
+
+    if (!results || typeof results !== 'object') {
+      console.error("Results is not a valid object:", results);
+      return <p className="text-red-500">Error: Scan results are not in the expected format.</p>;
+    }
+
+    const vulnerabilities = results.vulnerabilities || [];
+    const misconfigs = results.security_misconfigs || [];
+
+    const severityData = [
+      { name: 'Vulnerabilities', count: vulnerabilities.length },
+      { name: 'Misconfigurations', count: misconfigs.length },
+    ];
+
+    const COLORS = ['#FF0000', '#FFA500'];
+
+    return (
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
+        <div className="bg-white shadow rounded-lg p-4">
+          <h3 className="text-lg font-bold mb-4">Scan Issues Distribution</h3>
+          <BarChart width={400} height={300} data={severityData}>
+            <XAxis dataKey="name" />
+            <YAxis />
+            <Tooltip />
+            <Legend />
+            <Bar dataKey="count" fill="#8884d8" />
+          </BarChart>
+        </div>
+
+        <div className="bg-white shadow rounded-lg p-4">
+          <h3 className="text-lg font-bold mb-4">Category Distribution</h3>
+          <PieChart width={400} height={300}>
+            <Pie
+              data={severityData}
+              dataKey="count"
+              nameKey="name"
+              cx="50%"
+              cy="50%"
+              outerRadius={100}
+              fill="#8884d8"
+              label
+            >
+              {severityData.map((entry, index) => (
+                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+              ))}
+            </Pie>
+            <Tooltip />
+          </PieChart>
+        </div>
+      </div>
+    );
+  };
+
+  const renderDomainInfo = () => {
+    if (!scanCompleted || !domain) {
+      return null; // Don't render anything until the scan is complete
+    }
+
+    const logoUrl = `https://logo.clearbit.com/${domain}`;
+
+    return (
+      <div className="text-center mt-8">
+        <img
+          src={logoUrl}
+          alt={`${domain} logo`}
+          className="mx-auto mb-4 w-24 h-24 object-contain"
+          onError={(e) => (e.currentTarget.style.display = 'none')} // Hide image if logo is not available
+        />
+        <a
+          href={`https://${domain}`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-blue-600 underline"
+        >
+          Visit {domain}
+        </a>
       </div>
     );
   };
@@ -111,49 +229,77 @@ function ScanDomain() {
             <label htmlFor="domain" className="block text-sm font-medium text-gray-700">
               Domain Name
             </label>
-            <div className="mt-1">
-              <input
-                type="text"
-                name="domain"
-                id="domain"
-                value={domain}
-                onChange={(e) => setDomain(e.target.value)}
-                className="shadow-sm focus:ring-blue-500 focus:border-blue-500 block w-full sm:text-sm border-gray-300 rounded-md"
-                placeholder="example.com"
-                required
-              />
-            </div>
+            <input
+              type="text"
+              name="domain"
+              id="domain"
+              value={domain}
+              onChange={(e) => setDomain(e.target.value)}
+              className="mt-1 block w-full shadow-sm sm:text-sm border-gray-300 rounded-md"
+              placeholder="example.com"
+              required
+            />
           </div>
 
-          {error && (
-            <div className="rounded-md bg-red-50 p-4">
-              <div className="text-sm text-red-700">{error}</div>
-            </div>
-          )}
+          {error && <div className="text-red-500 text-sm">{error}</div>}
 
-          <div className="flex justify-center">
-            <button
-              type="submit"
-              disabled={scanning}
-              className={`inline-flex items-center px-6 py-3 border border-transparent text-base font-medium rounded-md shadow-sm text-white bg-blue-600 hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-blue-500 ${
-                scanning ? 'opacity-50 cursor-not-allowed' : ''
-              }`}
-            >
-              {scanning ? 'Scanning...' : 'Start Scan'}
-            </button>
-          </div>
+          <button
+            type="submit"
+            disabled={scanning}
+            className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:opacity-50"
+          >
+            {scanning ? 'Scanning...' : 'Start Scan'}
+          </button>
         </form>
 
         {scanning && (
           <div className="mt-8">
-            <div className="text-center">
-              <p className="text-lg font-medium text-gray-900">{currentTask}</p>
-              <p className="text-sm text-gray-500">Progress: {progress}%</p>
+            <p className="text-gray-700">{currentTask}</p>
+            <div className="w-full bg-gray-200 rounded-full h-4 mt-2">
+              <div
+                className="bg-blue-600 h-4 rounded-full"
+                style={{ width: `${progress}%` }}
+              ></div>
             </div>
+            <p className="text-sm text-gray-500 mt-2">Progress: {progress}%</p>
           </div>
         )}
 
-        {renderResults()}
+        {/* Printable Section */}
+        <div ref={reportRef} className="bg-white p-8 shadow-lg">
+          {/* Scan Date */}
+          {scanDate && (
+            <div className="text-right text-sm font-bold mb-4">
+              Scan Date: {scanDate}
+            </div>
+          )}
+
+          {/* Domain Info */}
+          {renderDomainInfo()}
+
+          {/* Charts */}
+          {renderCharts()}
+
+          {/* Table */}
+          {renderTable()}
+
+          {/* Footer */}
+          <div className="text-center mt-8 text-gray-500 text-sm">
+            © 2025 Astraeus Next Gen. All rights reserved.
+          </div>
+        </div>
+
+        {/* Download Button */}
+        {scanCompleted && (
+          <div className="mt-8 text-center">
+            <button
+              onClick={() => handlePrint()}
+              className="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700"
+            >
+              Download Report as PDF
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );

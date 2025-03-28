@@ -185,7 +185,7 @@ async def emit_scan_progress(scan_id, progress, message):
 async def emit_scan_complete(scan_id, results):
     """Emit scan completion notifications."""
     try:
-        # Convert datetime objects to ISO format
+        # Convert datetime objects to ISO format and ensure all details are preserved
         def serialize(obj):
             if isinstance(obj, datetime.datetime):
                 return obj.isoformat()
@@ -195,8 +195,13 @@ async def emit_scan_complete(scan_id, results):
                 return {key: serialize(value) for key, value in obj.items()}
             return obj
 
+        # Serialize the results while preserving all details
         serialized_results = serialize(results)
+
+        # Log the serialized results for debugging
         print(f"🎯 Scan complete for {scan_id}. Sending results: {serialized_results}")
+
+        # Emit the serialized results to the frontend
         await sio.emit('scan_complete', {'id': scan_id, 'results': serialized_results})
     except Exception as e:
         print(f"Error serializing scan results: {e}")
