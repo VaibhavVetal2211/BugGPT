@@ -120,7 +120,7 @@ const handleDownloadPDF = async () => {
       }
 
       
-      pdf.save('Domain_Security_Report.pdf');
+      pdf.save(`Domain_Security_Report_${domain}.pdf`);
     } catch (error) {
       console.error('Error generating PDF:', error);
     }
