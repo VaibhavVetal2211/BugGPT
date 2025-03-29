@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { io } from 'socket.io-client';
-import { useReactToPrint } from 'react-to-print';
+import jsPDF from 'jspdf';
+import html2canvas from 'html2canvas';
 import {
   BarChart,
   Bar,
@@ -23,23 +24,12 @@ function ScanDomain() {
   const [currentTask, setCurrentTask] = useState('');
   const [results, setResults] = useState<any | null>(null);
   const [scanCompleted, setScanCompleted] = useState(false);
-  const [scanDate, setScanDate] = useState<string | null>(null); // New state for scan date and time
+  const [scanDate, setScanDate] = useState<string | null>(null);
 
-  // Ref for the printable section
+  // Refs for capturing charts and the entire report
+  const barChartRef = useRef<HTMLDivElement>(null);
+  const pieChartRef = useRef<HTMLDivElement>(null);
   const reportRef = useRef<HTMLDivElement>(null);
-
-  // Function to handle PDF download
-  const handlePrint = () => {
-    const printContent = reportRef.current;
-    if (printContent) {
-      const printWindow = window.open('', '_blank');
-      if (printWindow) {
-        printWindow.document.write(printContent.outerHTML);
-        printWindow.document.close();
-        printWindow.print();
-      }
-    }
-  };
 
   useEffect(() => {
     if (scanId) {
@@ -55,13 +45,12 @@ function ScanDomain() {
       });
 
       socket.on('scan_complete', (data) => {
-        console.log("Scan complete data received:", data);
-        const parsedResults = typeof data.results === 'string' ? JSON.parse(data.results) : data.results;
-        console.log("Parsed results:", parsedResults);
+        const parsedResults =
+          typeof data.results === 'string' ? JSON.parse(data.results) : data.results;
         setResults(parsedResults);
         setScanning(false);
-        setScanCompleted(true); // Mark scan as completed
-        setScanDate(new Date().toLocaleString()); // Set the scan date and time
+        setScanCompleted(true);
+        setScanDate(new Date().toLocaleString());
       });
 
       return () => {
@@ -88,6 +77,57 @@ function ScanDomain() {
     }
   };
 
+const handleDownloadPDF = async () => {
+  if (reportRef.current) {
+    try {
+      const canvas = await html2canvas(reportRef.current, {
+        scale: 2,
+        useCORS: true,
+      });
+
+      const imgData = canvas.toDataURL('image/png');
+      const pdf = new jsPDF('p', 'mm', 'a4');
+
+      const pdfWidth = pdf.internal.pageSize.getWidth();
+      const pdfHeight = pdf.internal.pageSize.getHeight();
+
+      const imgWidth = canvas.width;
+      const imgHeight = canvas.height;
+
+      const ratio = imgWidth / pdfWidth;
+      const scaledHeight = imgHeight / ratio;
+
+      let y = 0;
+
+      while (y < imgHeight) {
+        const pageCanvas = document.createElement('canvas');
+        const pageCtx = pageCanvas.getContext('2d');
+
+        pageCanvas.width = imgWidth;
+        pageCanvas.height = Math.min(imgHeight - y, pdfHeight * ratio);
+
+        if (pageCtx) {
+          pageCtx.drawImage(canvas, 0, -y, imgWidth, imgHeight);
+        }
+
+        const pageData = pageCanvas.toDataURL('image/png');
+        pdf.addImage(pageData, 'PNG', 0, 0, pdfWidth, pageCanvas.height / ratio);
+
+        y += pdfHeight * ratio;
+        if (y < imgHeight) {
+          pdf.addPage();
+        }
+      }
+
+      
+      pdf.save('Domain_Security_Report.pdf');
+    } catch (error) {
+      console.error('Error generating PDF:', error);
+    }
+  }
+};
+
+
   const renderValue = (value: any) => {
     if (Array.isArray(value)) {
       return value.join(', ');
@@ -100,11 +140,10 @@ function ScanDomain() {
 
   const renderTable = () => {
     if (!scanCompleted) {
-      return null; // Don't render anything until the scan is complete
+      return null;
     }
 
     if (!results || typeof results !== 'object') {
-      console.error("Results is not a valid object:", results);
       return <p className="text-red-500">Error: Scan results are not in the expected format.</p>;
     }
 
@@ -135,11 +174,10 @@ function ScanDomain() {
 
   const renderCharts = () => {
     if (!scanCompleted) {
-      return null; // Don't render anything until the scan is complete
+      return null;
     }
 
     if (!results || typeof results !== 'object') {
-      console.error("Results is not a valid object:", results);
       return <p className="text-red-500">Error: Scan results are not in the expected format.</p>;
     }
 
@@ -155,7 +193,7 @@ function ScanDomain() {
 
     return (
       <div className="grid grid-cols-1 md:grid-cols-2 gap-8 mt-8">
-        <div className="bg-white shadow rounded-lg p-4">
+        <div ref={barChartRef} className="bg-white shadow rounded-lg p-4">
           <h3 className="text-lg font-bold mb-4">Scan Issues Distribution</h3>
           <BarChart width={400} height={300} data={severityData}>
             <XAxis dataKey="name" />
@@ -166,7 +204,7 @@ function ScanDomain() {
           </BarChart>
         </div>
 
-        <div className="bg-white shadow rounded-lg p-4">
+        <div ref={pieChartRef} className="bg-white shadow rounded-lg p-4">
           <h3 className="text-lg font-bold mb-4">Category Distribution</h3>
           <PieChart width={400} height={300}>
             <Pie
@@ -192,7 +230,7 @@ function ScanDomain() {
 
   const renderDomainInfo = () => {
     if (!scanCompleted || !domain) {
-      return null; // Don't render anything until the scan is complete
+      return null;
     }
 
     const logoUrl = `https://logo.clearbit.com/${domain}`;
@@ -203,7 +241,7 @@ function ScanDomain() {
           src={logoUrl}
           alt={`${domain} logo`}
           className="mx-auto mb-4 w-24 h-24 object-contain"
-          onError={(e) => (e.currentTarget.style.display = 'none')} // Hide image if logo is not available
+          onError={(e) => (e.currentTarget.style.display = 'none')}
         />
         <a
           href={`https://${domain}`}
@@ -267,33 +305,29 @@ function ScanDomain() {
 
         {/* Printable Section */}
         <div ref={reportRef} className="bg-white p-8 shadow-lg">
-          {/* Scan Date */}
           {scanDate && (
             <div className="text-right text-sm font-bold mb-4">
               Scan Date: {scanDate}
             </div>
           )}
-
-          {/* Domain Info */}
           {renderDomainInfo()}
-
-          {/* Charts */}
           {renderCharts()}
-
-          {/* Table */}
           {renderTable()}
 
-          {/* Footer */}
-          <div className="text-center mt-8 text-gray-500 text-sm">
-            © 2025 Astraeus Next Gen. All rights reserved.
-          </div>
+          {/* Footer Section inside Printable Section */}
+          {scanCompleted && (
+            <footer className="bg-gray-800 text-white py-4 mt-8">
+              <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+                <p className="text-center text-sm">© 2025 Astraeus Next Gen. All rights reserved.</p>
+              </div>
+            </footer>
+          )}
         </div>
 
-        {/* Download Button */}
         {scanCompleted && (
           <div className="mt-8 text-center">
             <button
-              onClick={() => handlePrint()}
+              onClick={handleDownloadPDF}
               className="bg-green-600 text-white py-2 px-4 rounded-md hover:bg-green-700"
             >
               Download Report as PDF
