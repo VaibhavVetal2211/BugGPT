@@ -17,7 +17,7 @@ import datetime
 import json
 import pandas as pd  # Add this import
 
-sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=["http://localhost:5173"])
+sio = socketio.AsyncServer(async_mode="asgi", cors_allowed_origins=[])
 socket_app = socketio.ASGIApp(sio)
 
 @asynccontextmanager
